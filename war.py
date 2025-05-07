@@ -1,5 +1,6 @@
 """
 war card game client and server
+Iris and Tamiraa
 """
 import asyncio
 from collections import namedtuple
@@ -21,9 +22,8 @@ socket, the cards given, the cards still available, etc.
 Game = namedtuple("Game", ["p1", "p2"])
 
 # Stores the clients waiting to get connected to other clients
-waiting_clients = []
-
-
+waiting_clients = asyncio.Queue()
+gamenum = 0
 class Command(Enum):
     """
     The byte values sent as the first byte of any message in the war protocol.
@@ -42,21 +42,33 @@ class Result(Enum):
     DRAW = 1
     LOSE = 2
 
-def readexactly(sock, numbytes):
+async def readexactly(sock, numbytes):
     """
     Accumulate exactly `numbytes` from `sock` and return those. If EOF is found
     before numbytes have been received, be sure to account for that here or in
     the caller.
     """
     # TODO
-    pass
+    data = bytearray()
+    while len(data) < numbytes:
+        remaining_bytes = numbytes - len(data)
+        chunk = await sock.read(remaining_bytes)
+        
+        if not chunk:
+            raise EOFError(f"Expected {numbytes} bytes, but only received {len(data)} bytes.")
+        
+        data.extend(chunk)
+    
+    return bytes(data)
 
 
 def kill_game(game):
     """
     TODO: If either client sends a bad message, immediately nuke the game.
     """
-    pass
+    game[0][1].close()
+    game[1][1].close()
+    return
 
 
 def compare_cards(card1, card2):
@@ -64,7 +76,10 @@ def compare_cards(card1, card2):
     TODO: Given an integer card representation, return -1 for card1 < card2,
     0 for card1 = card2, and 1 for card1 > card2
     """
-    pass
+    if (card1 % 13) < (card2 % 13):
+        return -1
+    else:
+        return 1
     
 
 def deal_cards():
@@ -72,8 +87,65 @@ def deal_cards():
     TODO: Randomize a deck of cards (list of ints 0..51), and return two
     26 card "hands."
     """
-    pass
-    
+    cards = []
+    for c in range(52):
+        cards.append(c)
+    random.shuffle(cards)
+    hand1 = cards[:26]
+    hand2 = cards[26:]
+    return hand1, hand2
+
+async def new_game(p1, p2, gamenum):
+    try:
+        p1_msg = await p1[0].readexactly(2)
+        p2_msg = await p2[0].readexactly(2)
+        if p1_msg != b"\0\0" or p2_msg != b"\0\0":
+            kill_game((p1, p2))
+        else:
+            hand1, hand2 = deal_cards()
+            p1[1].write(bytes([1] + hand1))
+            p2[1].write(bytes([1] + hand2))
+            for round in range (26):
+                p1_card = await p1[0].readexactly(2)
+                p2_card = await p2[0].readexactly(2)
+                result = compare_cards(p1_card[1], p2_card[1])
+                # logging.debug("Round {}: P1 - {} || P2 - {} || Winner: Player{}".format(round + 1, p1_card[1], p2_card[1], (1 if result == -1 else 2)))
+                if result == -1:
+                    
+                    p1[1].write(bytes([3 , 2]))
+                    p2[1].write(bytes([3 , 0]))
+                elif result == 1:
+                    p1[1].write(bytes([3 , 0]))
+                    p2[1].write(bytes([3 , 2]))
+                else:
+                    p1[1].write(bytes([3, 1]))
+                    p2[1].write(bytes([3, 1]))
+            if result == 0:
+                logging.debug("Game %s over. Draw.", gamenum)
+            else:
+                winner = "Player 1" if result > 0 else "Player 2"
+                logging.debug("Game %s over. %s won.", gamenum, winner)
+
+    except asyncio.IncompleteReadError as e:
+        logging.error(f"IncompleteReadError: {e} - Handling disconnection.")
+        kill_game((p1, p2))
+    except Exception as e:
+        logging.error(f"Unexpected error: {e}")
+        kill_game((p1, p2))  
+
+
+
+async def pair_clients(reader, writer):
+    global gamenum
+    if waiting_clients.empty():
+        await waiting_clients.put((reader, writer))
+        logging.debug("Client connected, waiting....")
+    else:
+        p1 = await waiting_clients.get()
+        p2 = (reader, writer)
+        gamenum += 1
+        logging.debug("Client connected to waiting client. Starting game %s....", gamenum)
+        asyncio.create_task(new_game(p1, p2, gamenum))
 
 def serve_game(host, port):
     """
@@ -81,8 +153,16 @@ def serve_game(host, port):
     perform the war protocol to serve a game of war between each client.
     This function should run forever, continually serving clients.
     """
-    pass
-    
+    loop = asyncio.get_event_loop()
+    coro = asyncio.start_server(pair_clients, host, port)
+    server = loop.run_until_complete(coro)
+    logging.debug('Serving on {}'.format(server.sockets[0].getsockname()))
+    try:
+        loop.run_forever()
+    except KeyboardInterrupt:
+        pass
+        
+
 
 async def limit_client(host, port, loop, sem):
     """
