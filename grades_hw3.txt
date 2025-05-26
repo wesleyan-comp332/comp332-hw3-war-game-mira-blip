@@ -1,6 +1,6 @@
-1: Two clients successfully completed a game with the server most of the time. 
-(There is a small error in the code related to draw games, the case of cards being of equal value is not considered in the compare cards function)
+1: Two clients successfully completed a game with the server in under 3 seconds.
+There seems to be a bug in the code related to draw games
 2: The server correctly handled a game with a buggy client, and continued functioning as expected afterwards.
 3: Successfully completed multiple games at the same time.
 
-Total points: 110 - 15 = 95
+Total points: 110 - 10 = 100 points
